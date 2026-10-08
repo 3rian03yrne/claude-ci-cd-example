@@ -130,6 +130,24 @@ jobs:
             --append-system-prompt-file .claude/rules/testing.md \
             --output-format json > "reports/claude-${SLUG}.json" || true
 
+      # `|| true` above hides a claude that never started (bad flag, missing settings
+      # file, auth). Without a result object nothing was written, so fail the leg here
+      # rather than let the later steps pass on the unchanged test file. A run that
+      # started but ended in error (e.g. max turns) may still have written usable
+      # tests, so that only warns and the steps below decide.
+      - name: Check Claude ran
+        env:
+          SLUG: ${{ matrix.module.slug }}
+        run: |
+          out="reports/claude-${SLUG}.json"
+          if ! jq -e '.type == "result"' "$out" > /dev/null 2>&1; then
+            echo "::error::Claude produced no result; see the 'Write tests with Claude' step log."
+            exit 1
+          fi
+          if jq -e '.is_error' "$out" > /dev/null; then
+            echo "::warning::Claude ended with an error: $(jq -r '.subtype' "$out")"
+          fi
+
       - name: Check only the target file changed
         env:
           TEST_FILE: ${{ matrix.module.test_file }}
