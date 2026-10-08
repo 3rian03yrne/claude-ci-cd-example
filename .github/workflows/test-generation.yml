@@ -244,10 +244,11 @@ jobs:
       - name: Post summary to PR
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          # Update the bot's previous comment, or create one if there isn't one yet.
-          gh pr comment "$PR_NUMBER" --body-file reports/test-gen-summary.md --edit-last --create-if-none
+          # Update this workflow's own comment, or create one if there isn't one yet.
+          .github/scripts/upsert-pr-comment.sh "$PR_NUMBER" test-generation reports/test-gen-summary.md
 
       - name: Upload reports
         if: always()
