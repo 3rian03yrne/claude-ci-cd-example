@@ -21,6 +21,12 @@ Run tests
 uv run pytest
 ```
 
+Run coverage report
+
+```
+uv run pytest --cov
+```
+
 ## Project Structure
 
 The project has the structure of a typical FastAPI project.
