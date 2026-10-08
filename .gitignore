@@ -224,3 +224,7 @@ app.db
 
 # coverage
 .coverage
+
+# generated reports
+reports/**
+!reports/README.md
