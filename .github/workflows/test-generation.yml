@@ -1,0 +1,239 @@
+name: Test generation
+
+# Fan-out / fan-in:
+#   plan   finds coverage gaps in the PR's changed route handlers (a script, no Claude)
+#   write  runs one `claude --bare` leg per test module, in parallel (matrix)
+#   merge  gathers the legs' test files, runs the full suite, commits and comments
+#
+# Each leg owns one test file, so the legs can't conflict. Claude runs in bare
+# mode, which loads no settings, hooks or CLAUDE.md: permissions come from
+# .github/claude/test-gen.settings.json, the testing rule is appended to the
+# system prompt (bare mode doesn't load .claude/rules), and the write-tests
+# skill reads the review standard itself.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "app/**"
+
+permissions:
+  contents: read
+
+# One run per PR at a time, so rapid pushes don't race to commit to the branch.
+concurrency:
+  group: test-gen-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so a new Claude Code release can't change generation behaviour unannounced.
+  CLAUDE_CODE_VERSION: "2.1.294"
+  UV_VERSION: "0.12.19"
+
+jobs:
+  plan:
+    # Only run for PRs from branches in this repo (a fork PR could edit the skills,
+    # and doesn't get secrets anyway), and never on this workflow's own commits.
+    # The merge job's GITHUB_TOKEN push still creates runs for the new commit, but
+    # GitHub holds them for approval. If approved, this actor check skips every
+    # job, so the workflow never loops.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      modules: ${{ steps.plan.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The branch itself (not the merge commit), with full history for the diff.
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Measure baseline coverage
+        run: |
+          uv run pytest -q --cov --cov-report=json:reports/coverage-before.json
+
+      - name: Find coverage gaps
+        id: plan
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          uv run python .claude/skills/generate-tests/scripts/coverage_gaps.py plan "origin/${BASE_REF}" \
+            reports/coverage-before.json > reports/plan.json
+          cat reports/plan.json
+          echo "modules=$(cat reports/plan.json)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: plan
+          path: |
+            reports/plan.json
+            reports/coverage-before.json
+
+  write:
+    needs: plan
+    if: needs.plan.outputs.modules != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # One module failing shouldn't throw away the others' tests.
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.plan.outputs.modules) }}
+    name: write (${{ matrix.module.test_file }})
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref }}
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Install Claude Code
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      - name: Write tests with Claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Passed through env, not interpolated into the script.
+          GAPS: ${{ toJSON(matrix.module.gaps) }}
+          SLUG: ${{ matrix.module.slug }}
+          TEST_FILE: ${{ matrix.module.test_file }}
+        run: |
+          printf '%s' "$GAPS" > "reports/gaps-${SLUG}.json"
+
+          # The pass/fail decision is made by the steps below, not claude's exit code.
+          claude --bare -p "/write-tests ${TEST_FILE} reports/gaps-${SLUG}.json reports/notes-${SLUG}.md" \
+            --model sonnet \
+            --max-turns 30 \
+            --add-dir . \
+            --settings .github/claude/test-gen.settings.json \
+            --append-system-prompt-file .claude/rules/testing.md \
+            --output-format json > "reports/claude-${SLUG}.json" || true
+
+      - name: Check only the target file changed
+        env:
+          TEST_FILE: ${{ matrix.module.test_file }}
+        run: |
+          outside="$(git status --porcelain --untracked-files=all | cut -c4- | grep -vxF "$TEST_FILE" || true)"
+          if [ -n "$outside" ]; then
+            echo "::error::Writer changed files other than $TEST_FILE:"
+            echo "$outside"
+            exit 1
+          fi
+
+      - name: Run the module's tests
+        env:
+          TEST_FILE: ${{ matrix.module.test_file }}
+        run: uv run pytest -q "$TEST_FILE"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tests-${{ matrix.module.slug }}
+          # Uploaded from the repo root so paths are restored as-is in merge.
+          path: |
+            ${{ matrix.module.test_file }}
+            reports/notes-${{ matrix.module.slug }}.md
+            reports/claude-${{ matrix.module.slug }}.json
+          if-no-files-found: ignore
+
+  merge:
+    needs: [plan, write]
+    # Run even if some legs failed, and keep the tests from the ones that passed.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.modules != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref }}
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: plan
+          path: reports
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: tests-*
+          merge-multiple: true
+          path: .
+
+      # The test gate for the commit below: tests.yml runs for a GITHUB_TOKEN push
+      # only after someone approves it.
+      - name: Run full suite
+        run: uv run pytest -q --cov --cov-report=json:reports/coverage-after.json
+
+      - name: Write summary
+        run: |
+          uv run python .claude/skills/generate-tests/scripts/coverage_gaps.py summary reports/plan.json \
+            reports/coverage-before.json reports/coverage-after.json reports/notes-*.md \
+            > reports/test-gen-summary.md
+          if [ "${{ needs.write.result }}" != "success" ]; then
+            printf '\n> Some write legs failed; see the workflow run. Tests from the others were kept.\n' \
+              >> reports/test-gen-summary.md
+          fi
+          cat reports/test-gen-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Bot Details
+        id: bot-details
+        uses: raven-actions/bot-details@v1
+
+      - name: Commit generated tests
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [ -z "$(git status --porcelain -- tests/)" ]; then
+            echo "No test changes to commit."
+            exit 0
+          fi
+          git config user.name ${{ steps.bot-details.outputs.name }}
+          git config user.email ${{ steps.bot-details.outputs.email }}
+          git add tests/
+          git commit -m "test: generate tests for coverage gaps"
+          git push origin "HEAD:${HEAD_REF}"
+
+      - name: Post summary to PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Update the bot's previous comment, or create one if there isn't one yet.
+          gh pr comment "$PR_NUMBER" --body-file reports/test-gen-summary.md --edit-last --create-if-none
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-generation
+          path: reports/

@@ -1,0 +1,77 @@
+name: Dependency audit
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# One run per PR at a time, so rapid pushes don't race when posting comments.
+concurrency:
+  group: dep-audit-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  uv-audit:
+    # Only run for PRs from branches in this repo. A fork PR could edit the
+    # skill or CLAUDE.md, and fork PRs don't get secrets anyway.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Pinned so a new Claude Code release can't change audit behaviour unannounced.
+      CLAUDE_CODE_VERSION: "2.1.294"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: "0.12.19"
+          enable-cache: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install Claude Code
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      - name: Run audit skill with Claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Don't let a non-zero exit stop the step (bash -e); the report check
+          # below decides pass/fail and prints claude's output if it failed.
+          claude --bare -p "/dependency audit-report.md" \
+            --model haiku \
+            --max-turns 20 \
+            --add-dir . \
+            --output-format json > claude-result.json || true
+
+          if [ ! -s reports/audit-report.md ]; then
+            echo "Claude did not produce audit-report.md" >&2
+            cat claude-result.json >&2
+            exit 1
+          fi
+
+      - name: Post report to PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Update the bot's previous comment, or create one if there isn't one yet.
+          gh pr comment "$PR_NUMBER" --body-file reports/audit-report.md --edit-last --create-if-none
+
+
+      - name: Upload Dependency audit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependency-audit
+          path: reports/

@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit(tests/**)",
+      "Edit(reports/**)",
+      "Bash(uv run pytest *)"
+    ],
+    "deny": [
+      "Edit(app/**)",
+      "Edit(tests/conftest.py)",
+      "Edit(.github/**)",
+      "Edit(.claude/**)",
+      "Bash(git *)",
+      "Bash(uv add *)",
+      "Bash(curl *)"
+    ]
+  }
+}
