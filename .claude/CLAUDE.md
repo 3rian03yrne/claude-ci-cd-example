@@ -11,3 +11,8 @@ See @README.md for project overview and @pyproject.toml for project config.
 - `uv run fastapi dev`: run the app
 - `uv run pytest`: run the tests
 - `uv run pytest --cov`: run the tests with a coverage report
+- `uv run ruff format`: format the code
+
+## Formatting
+
+After adding or changing code, run `uv run ruff format` on the files you touched.
