@@ -2,7 +2,7 @@ from collections.abc import Callable
 
 from fastapi.testclient import TestClient
 
-from app.models import User
+from app.models import Order, User
 
 
 def test_get_user(client: TestClient, make_user: Callable[..., User]) -> None:
@@ -32,3 +32,112 @@ def test_get_user_invalid_id(client: TestClient) -> None:
     error = response.json()["detail"][0]
     assert error["type"] == "int_parsing"
     assert error["loc"] == ["path", "user_id"]
+
+
+def test_create_user(client: TestClient) -> None:
+    response = client.post(
+        "/users/", json={"name": "Ada Lovelace", "email": "ada@example.com"}
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body == {
+        "id": body["id"],
+        "name": "Ada Lovelace",
+        "email": "ada@example.com",
+    }
+
+
+def test_create_user_duplicate_email(
+    client: TestClient, make_user: Callable[..., User]
+) -> None:
+    make_user(email="taken@example.com")
+
+    response = client.post(
+        "/users/", json={"name": "Other", "email": "taken@example.com"}
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Email already registered"}
+
+
+def test_list_users_excludes_deleted(
+    client: TestClient, make_user: Callable[..., User]
+) -> None:
+    kept = make_user(name="Kept", email="kept@example.com")
+    removed = make_user(name="Removed", email="removed@example.com")
+    client.delete(f"/users/{removed.id}")
+
+    response = client.get("/users/")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {"id": kept.id, "name": "Kept", "email": "kept@example.com"}
+    ]
+
+
+def test_update_user_name_only(
+    client: TestClient, make_user: Callable[..., User]
+) -> None:
+    user = make_user(name="Old", email="old@example.com")
+
+    response = client.patch(f"/users/{user.id}", json={"name": "New"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": user.id,
+        "name": "New",
+        "email": "old@example.com",
+    }
+
+
+def test_update_user_email(client: TestClient, make_user: Callable[..., User]) -> None:
+    user = make_user(name="Same", email="old@example.com")
+
+    response = client.patch(f"/users/{user.id}", json={"email": "new@example.com"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": user.id,
+        "name": "Same",
+        "email": "new@example.com",
+    }
+
+
+def test_update_user_duplicate_email(
+    client: TestClient, make_user: Callable[..., User]
+) -> None:
+    make_user(email="taken@example.com")
+    user = make_user(email="mine@example.com")
+
+    response = client.patch(f"/users/{user.id}", json={"email": "taken@example.com"})
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Email already registered"}
+
+
+def test_update_user_not_found(client: TestClient) -> None:
+    response = client.patch("/users/999", json={"name": "X"})
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "User not found"}
+
+
+def test_delete_user(client: TestClient, make_user: Callable[..., User]) -> None:
+    user = make_user()
+
+    response = client.delete(f"/users/{user.id}")
+
+    assert response.status_code == 204
+    assert client.get(f"/users/{user.id}").status_code == 404
+
+
+def test_delete_user_with_active_orders(
+    client: TestClient, make_order: Callable[..., Order]
+) -> None:
+    order = make_order()
+
+    response = client.delete(f"/users/{order.user_id}")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "User has active orders"}
