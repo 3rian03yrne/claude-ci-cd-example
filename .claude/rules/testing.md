@@ -9,7 +9,7 @@ How to write tests in this repo.
 ## Standards
 
 - One behaviour per test. Name it `test_<endpoint>_<case>`, e.g. `test_get_user_not_found`.
-- Arrange / act / assert, separated by blank lines (see `tests/test_users.py`).
+- Arrange / act / assert, separated by blank lines (see `tests/routers/test_users.py`).
 - Assert the status code and the whole JSON body, not individual keys, unless a value
   is non-deterministic (e.g. `created_at`: pop it and check it separately).
 - Decimals come back as strings: assert `"9.90"`, not `9.9`.

@@ -3,7 +3,7 @@ name: write-tests
 description: Writes pytest tests for a given list of coverage gaps in one test module. Used by generate-tests and by each fan-out leg of the test-generation workflow.
 allowed-tools: [Read, Edit(tests/**), Edit(reports/**), Bash(uv run pytest *)]
 disallowed-tools: [Edit(app/**), Edit(tests/conftest.py), Bash(git *), Bash(uv add *)]
-argument-hint: <test-file> <gaps-json> <notes-path> # e.g. tests/test_users.py reports/gaps-users.json reports/notes-users.md
+argument-hint: <test-file> <gaps-json> <notes-path> # e.g. tests/routers/test_users.py reports/gaps-users.json reports/notes-users.md
 ---
 
 # Write Tests

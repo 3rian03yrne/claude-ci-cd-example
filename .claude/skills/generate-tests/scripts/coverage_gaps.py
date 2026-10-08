@@ -104,12 +104,14 @@ def plan(base_ref: str, coverage_path: str) -> list[dict]:
                     {"function": handler.name, "lines": lines, "branches": branches}
                 )
         if gaps:
-            slug = Path(module).stem
+            # Tests mirror the app layout: app/routers/x.py -> tests/routers/test_x.py.
+            rel = Path(module).relative_to("app")
+            slug = rel.stem
             modules.append(
                 {
                     "slug": slug,
                     "module": module,
-                    "test_file": f"tests/test_{slug}.py",
+                    "test_file": str(Path("tests", rel.parent, f"test_{rel.name}")),
                     "gaps": gaps,
                 }
             )
