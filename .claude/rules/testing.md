@@ -15,6 +15,9 @@ How to write tests in this repo.
 - Decimals come back as strings: assert `"9.90"`, not `9.9`.
 - No sleeps, no network, no reliance on test order.
 - Test through the HTTP API with `client`. Don't call router functions directly.
+- To reach an error path the API can't trigger on its own (e.g. a race between a
+  pre-check and the commit), `monkeypatch` the helper that guards it and still make
+  the request through `client`.
 
 A new test is accepted when all of these hold:
 
