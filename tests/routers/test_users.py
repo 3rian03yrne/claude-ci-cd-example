@@ -1,8 +1,10 @@
 from collections.abc import Callable
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.models import Order, User
+from app.routers import users as users_router
 
 
 def test_get_user(client: TestClient, make_user: Callable[..., User]) -> None:
@@ -141,3 +143,23 @@ def test_delete_user_with_active_orders(
 
     assert response.status_code == 409
     assert response.json() == {"detail": "User has active orders"}
+
+
+def test_create_user_email_race_returns_conflict(
+    client: TestClient,
+    make_user: Callable[..., User],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    make_user(email="taken@example.com")
+    # Simulate losing the race: the pre-check passes, the unique index rejects.
+    monkeypatch.setattr(users_router, "_ensure_email_available", lambda *a, **k: None)
+
+    response = client.post(
+        "/users/", json={"name": "Other", "email": "taken@example.com"}
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Email already registered"}
+    assert client.get("/users/").json() == [
+        {"id": 1, "name": "User 1", "email": "taken@example.com"}
+    ]
