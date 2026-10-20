@@ -1,7 +1,7 @@
 name: Test generation
 
 # Fan-out / fan-in:
-#   plan   finds coverage gaps in the PR's changed route handlers (a script, no Claude)
+#   plan   finds coverage gaps in the PR's changed functions (a script, no Claude)
 #   write  runs one `claude --bare` leg per test module, in parallel (matrix)
 #   merge  gathers the legs' test files, runs the full suite, commits and comments
 #

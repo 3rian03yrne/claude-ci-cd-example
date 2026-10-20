@@ -28,3 +28,9 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+# Startup code and dependencies that tests replace by design.
+exclude_also = [
+    "def get_session",
+    "def create_db_and_tables",
+    "async def lifespan",
+]

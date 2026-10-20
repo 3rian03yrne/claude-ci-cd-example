@@ -22,7 +22,7 @@ report path (default `reports/test-gen-summary.md`).
 2. Plan:
    `uv run python .claude/skills/generate-tests/scripts/coverage_gaps.py plan <base-ref> reports/coverage-before.json`.
    Save the output to `reports/plan.json`. It's a list of modules with gaps. If it's empty (`[]`),
-   write `No coverage gaps in changed route handlers.` to the report and stop.
+   write `No coverage gaps in changed functions.` to the report and stop.
 3. For each module in the plan:
    - Write its `gaps` array to `reports/gaps-<slug>.json`.
    - Follow `.claude/skills/write-tests/SKILL.md` with these arguments:

@@ -5,7 +5,7 @@ local run and CI split the work the same way. Standard library only.
 
     python coverage_gaps.py plan <base-ref> <coverage.json>
         Prints a JSON array with one object per target test module with coverage gaps
-        in changed route handlers: {"slug", "module", "test_file", "gaps"}.
+        in changed functions: {"slug", "module", "test_file", "gaps"}.
 
     python coverage_gaps.py summary <plan.json> <coverage-before.json> <coverage-after.json> [notes.md ...]
         Prints the PR summary in Markdown.
@@ -18,7 +18,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
 
 
@@ -42,7 +41,7 @@ def changed_app_files(base_ref: str) -> list[str]:
 
 def changed_lines(base_ref: str, module: str) -> set[int]:
     # New-side line numbers added or modified in the diff. A pure deletion (count 0)
-    # adds no lines, but it still changed whatever handler it sits in, so it counts
+    # adds no lines, but it still changed whatever function it sits in, so it counts
     # as touching line c, the line before the deletion point.
     out = subprocess.run(
         [
@@ -65,19 +64,17 @@ def changed_lines(base_ref: str, module: str) -> set[int]:
     return lines
 
 
-def route_handlers(source: str) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
-    # Only route handlers are in scope: startup code and dependencies such as
-    # lifespan and get_session are replaced in tests by design.
-    handlers = []
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            continue
-        for decorator in node.decorator_list:
-            func = decorator.func if isinstance(decorator, ast.Call) else decorator
-            if isinstance(func, ast.Attribute) and func.attr in HTTP_METHODS:
-                handlers.append(node)
-                break
-    return handlers
+def functions(source: str) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    # Top-level functions and class methods. Nested functions sit inside their
+    # parent's span, so they're covered by it. Code that tests replace by design
+    # (lifespan, get_session) is excluded in pyproject.toml, not here.
+    found = []
+    for node in ast.parse(source).body:
+        body = node.body if isinstance(node, ast.ClassDef) else [node]
+        found += [
+            n for n in body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
+        ]
+    return found
 
 
 def plan(base_ref: str, coverage_path: str) -> list[dict]:
@@ -91,17 +88,17 @@ def plan(base_ref: str, coverage_path: str) -> list[dict]:
         missing_branches = report.get("missing_branches", [])
         changed = changed_lines(base_ref, module)
         gaps = []
-        for handler in route_handlers(Path(module).read_text()):
-            # Decorators sit above handler.lineno; include them in the span.
-            first = min([d.lineno for d in handler.decorator_list] + [handler.lineno])
-            span = range(first, handler.end_lineno + 1)
+        for function in functions(Path(module).read_text()):
+            # Decorators sit above function.lineno; include them in the span.
+            first = min([d.lineno for d in function.decorator_list] + [function.lineno])
+            span = range(first, function.end_lineno + 1)
             if changed.isdisjoint(span):
                 continue
             lines = sorted(line for line in missing if line in span)
             branches = [branch for branch in missing_branches if branch[0] in span]
             if lines or branches:
                 gaps.append(
-                    {"function": handler.name, "lines": lines, "branches": branches}
+                    {"function": function.name, "lines": lines, "branches": branches}
                 )
         if gaps:
             # Tests mirror the app layout: app/routers/x.py -> tests/routers/test_x.py.
